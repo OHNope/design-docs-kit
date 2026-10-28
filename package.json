@@ -1,0 +1,38 @@
+{
+  "name": "design-docs-kit",
+  "version": "0.1.0",
+  "description": "Turn a git repo into a design-docs site that people review in the browser and AI agents read and update: VitePress pages with HTML embeds, AGENTS.md rules, a docs MCP server, a checker and a SessionStart sync hook.",
+  "type": "module",
+  "bin": {
+    "design-docs-kit": "bin/cli.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "kit",
+    "templates",
+    "skill",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "keywords": [
+    "design-docs",
+    "vitepress",
+    "mcp",
+    "agents-md",
+    "claude-code",
+    "documentation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OHNope/design-docs-kit.git"
+  },
+  "license": "MIT",
+  "author": "OHNope"
+}
