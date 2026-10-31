@@ -209,6 +209,8 @@ export function searchDocs(docsDir, query, limit = 10) {
 
 const LINK_RE = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
 const EMBED_RE = /<Embed\b[^>]*\bsrc=["']([^"']+)["'][^>]*\/?>/g
+// Markdown autolinks: <https://example.com>, <mailto:a@b.c>, <a@b.c>.
+const AUTOLINK_RE = /<(?:[a-z][a-z0-9+.-]{1,31}:[^\s<>]*|[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)>/gi
 
 function stripCodeSpans(line) {
   return line.replace(/`+[^`]*`+/g, (m) => ' '.repeat(m.length))
@@ -250,7 +252,7 @@ export function checkDocs(docsDir) {
         const problem = checkLocalTarget(docsDir, publicDir, path, clean, usedAssets)
         if (problem) errors.push(`${at(l.n)} ${problem}: ${target}`)
       }
-      const tagLine = line.replace(EMBED_RE, '')
+      const tagLine = line.replace(EMBED_RE, '').replace(AUTOLINK_RE, '')
       const tag = tagLine.match(/<\/?([A-Za-z][\w-]*)/)
       if (tag && !ALLOWED_TAGS.has(tag[1].toLowerCase())) {
         warnings.push(`${at(l.n)} raw <${tag[1]}> tag; escape "<" as &lt; unless the HTML is intended`)

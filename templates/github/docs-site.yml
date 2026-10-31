@@ -1,0 +1,58 @@
+# Builds the design docs (__DOCS_DIR__/) and deploys them to Cloudflare Pages on every push to __BRANCH__ that touches them.
+# Cloudflare Access in front of the site lets in only the listed emails (__DOCS_DIR__/guide/03-deploy.md).
+# Needs the repository secret CLOUDFLARE_API_TOKEN (account API token with Cloudflare Pages: Edit).
+# Written by design-docs-kit deploy; run it again to update this file.
+name: docs-site
+
+on:
+  push:
+    branches: [__BRANCH__]
+    paths:
+      - "__DOCS_DIR__/**"
+      - ".github/workflows/docs-site.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-site
+  cancel-in-progress: true
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: __ACCOUNT_ID__
+  PAGES_PROJECT: __PROJECT__
+  WRANGLER: wrangler@4.151.1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: __DOCS_DIR__
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # "last updated" dates come from git history
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: __DOCS_DIR__/package-lock.json
+      - run: npm ci
+      - run: npm run build # runs the docs checker first; errors stop the deploy
+      - name: Create the Pages project on first run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if out=$(npx --yes "$WRANGLER" pages project create "$PAGES_PROJECT" --production-branch __BRANCH__ 2>&1); then
+            echo "$out"
+          elif echo "$out" | grep -qi "already exists"; then
+            echo "Pages project $PAGES_PROJECT already exists"
+          else
+            echo "$out"; exit 1
+          fi
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes "$WRANGLER" pages deploy .vitepress/dist --project-name "$PAGES_PROJECT" --branch __BRANCH__ --commit-hash "$GITHUB_SHA"

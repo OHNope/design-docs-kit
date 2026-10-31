@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { init } from '../src/init.mjs'
 import { runCheck } from '../kit/check.mjs'
 import { serve } from '../kit/mcp.mjs'
+import { setupDeploy } from '../src/deploy.mjs'
+import { deployStatus, findRoot, formatStatus } from '../kit/deploy.mjs'
 
 const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8'))
 
@@ -14,6 +16,9 @@ Usage:
   design-docs-kit init [options]   Set up (or upgrade) the docs site in the current git repo
   design-docs-kit check [dir]      Check the docs pages (default: the folder in .design-docs.json)
   design-docs-kit mcp [dir]        Run the design-docs MCP server on stdio
+  design-docs-kit deploy [options] Write the GitHub Actions workflow that publishes the site
+                                   to Cloudflare Pages, then show what is left to do
+  design-docs-kit deploy status    Only show the deploy status: each step, the next action, who does it
 
 Options for init:
   --dir <path>      Docs folder, relative to the repo root (default: docs)
@@ -24,12 +29,25 @@ Options for init:
   --force           Also overwrite .vitepress/config.mjs and the theme files
   --no-install      Skip npm install in the docs folder
   --dry-run         Print what would change, write nothing
+
+Options for deploy:
+  --account-id <id> Cloudflare account id (32 hex characters, from the dashboard URL)
+  --project <name>  Cloudflare Pages project name (default: <repo>-docs)
+  --dry-run         Print what would change, write nothing
 `
 
 function parseArgs(argv) {
   const opts = { _: [] }
   const flags = { '--force': 'force', '--dry-run': 'dryRun', '--strict': 'strict' }
-  const values = { '--dir': 'dir', '--lang': 'lang', '--title': 'title', '--branch': 'branch', '--site-url': 'siteUrl' }
+  const values = {
+    '--dir': 'dir',
+    '--lang': 'lang',
+    '--title': 'title',
+    '--branch': 'branch',
+    '--site-url': 'siteUrl',
+    '--account-id': 'accountId',
+    '--project': 'project',
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     const [key, inline] = a.split(/=(.*)/s)
@@ -57,7 +75,7 @@ function docsDirFrom(arg) {
   }
 }
 
-function main() {
+async function main() {
   const [cmd, ...rest] = process.argv.slice(2)
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') return console.log(HELP)
   if (cmd === '--version' || cmd === '-v') return console.log(pkg.version)
@@ -72,7 +90,7 @@ function main() {
 Next:
   1. Fill in "What goes where" in ${res.config.dir}/guide/01-maintaining.md for this project.
   2. Preview: npm --prefix ${res.config.dir} run dev
-  3. Deploy: follow ${res.config.dir}/guide/03-deploy.md (Cloudflare Pages + Access).`)
+  3. Deploy: design-docs-kit deploy status, then follow ${res.config.dir}/guide/03-deploy.md.`)
     return
   }
   if (cmd === 'check') {
@@ -80,12 +98,20 @@ Next:
     return
   }
   if (cmd === 'mcp') return serve(docsDirFrom(opts._[0]))
+  if (cmd === 'deploy' && opts._[0] === 'status') return console.log(formatStatus(await deployStatus(findRoot(process.cwd()))))
+  if (cmd === 'deploy') {
+    if (opts._.length) throw new Error(`Unknown deploy argument "${opts._[0]}"`)
+    const res = await setupDeploy(opts)
+    const width = Math.max(...res.actions.map((a) => a.action.length))
+    for (const a of res.actions) console.log(`${a.action.padEnd(width)}  ${a.path}`)
+    if (opts.dryRun) return console.log('\nDry run: nothing was written.')
+    console.log('\n' + formatStatus(res.status))
+    return
+  }
   throw new Error(`Unknown command "${cmd}". Run design-docs-kit --help.`)
 }
 
-try {
-  main()
-} catch (e) {
+main().catch((e) => {
   console.error(`design-docs-kit: ${e.message}`)
   process.exitCode = 1
-}
+})

@@ -10,6 +10,8 @@ import { buildSidebar } from '../kit/sidebar.mjs'
 import { searchTokenize } from '../kit/ui.mjs'
 import { createHandlers, handleMessage, serve } from '../kit/mcp.mjs'
 import { init, upsertBlock, mergeSettings } from '../src/init.mjs'
+import { setupDeploy } from '../src/deploy.mjs'
+import { pagesProjectName, siteFromDeployLog, classifyAccess, formatStatus } from '../kit/deploy.mjs'
 
 function docsFixture(files) {
   const dir = mkdtempSync(join(tmpdir(), 'ddk-'))
@@ -109,15 +111,15 @@ test('MCP server answers initialize, tools/list and tools/call over stdio', asyn
   const res = lines.map((l) => JSON.parse(l))
   assert.equal(res.length, 3)
   assert.equal(res[0].result.protocolVersion, '2025-06-18')
-  assert.deepEqual(res[1].result.tools.map((t) => t.name), ['docs_overview', 'docs_search', 'docs_read', 'docs_check'])
+  assert.deepEqual(res[1].result.tools.map((t) => t.name), ['docs_overview', 'docs_search', 'docs_read', 'docs_check', 'docs_deploy_status'])
   assert.match(res[2].result.content[0].text, /不用 Rust/)
 })
 
-test('MCP overview lists pages with summaries; unknown pages are errors', () => {
+test('MCP overview lists pages with summaries; unknown pages are errors', async () => {
   const h = createHandlers(docsFixture(SAMPLE))
   assert.match(h.docs_overview().content[0].text, /baseline\/06-runtime\.md — 6 运行时与稳定性: 租约默认 60 秒/)
   assert.equal(h.docs_read({ path: 'nope.md' }).isError, true)
-  assert.equal(handleMessage(h, { jsonrpc: '2.0', id: 9, method: 'nope' }).error.code, -32601)
+  assert.equal((await handleMessage(h, { jsonrpc: '2.0', id: 9, method: 'nope' })).error.code, -32601)
 })
 
 test('AGENTS.md block is replaced in place, not duplicated', () => {
@@ -192,4 +194,54 @@ test('init sets up a repo, keeps existing pages and is idempotent', () => {
   assert.equal(second.config.lang, 'zh-CN')
   const check = checkDocs(join(root, 'docs'))
   assert.deepEqual(check.errors, [])
+})
+
+test('check accepts Markdown autolinks but still flags raw tags', () => {
+  const dir = docsFixture({ 'index.md': '# Home\n\nSee <https://example.com/a?b=1> or <team@example.com>.\n\nA <custom> tag.\n' })
+  const { warnings } = checkDocs(dir)
+  assert.equal(warnings.length, 1, warnings.join('\n'))
+  assert.match(warnings[0], /index\.md:5 raw <custom> tag/)
+})
+
+test('deploy helpers: project names, the address in the deploy log, Access detection', () => {
+  assert.equal(pagesProjectName('Meta_Workflow'), 'meta-workflow-docs')
+  assert.equal(pagesProjectName('设计'), 'design-docs')
+  const log = 'deploy\tDeploy\t2026-10-31T03:55:05Z ✨ Deployment complete! Take a peek over at https://41012cfc.meta-workflow-docs-a1b.pages.dev'
+  assert.equal(siteFromDeployLog(log), 'https://meta-workflow-docs-a1b.pages.dev')
+  assert.equal(siteFromDeployLog('nothing here'), null)
+  assert.equal(classifyAccess(302, 'https://team.cloudflareaccess.com/cdn-cgi/access/login/x'), 'protected')
+  assert.equal(classifyAccess(302, 'https://elsewhere.example/'), 'redirect')
+  assert.equal(classifyAccess(200, null), 'public')
+  assert.equal(classifyAccess(404, null), 'missing')
+  const text = formatStatus({ site: null, steps: [{ id: 'account', state: 'todo', text: 'No account', next: 'Sign up', who: 'you' }] })
+  assert.match(text, /\[todo\] account: No account\n\s+next \(you\): Sign up[\s\S]*Next step: account \(you\)/)
+})
+
+test('deploy writes the workflow, keeps the config and reports the remaining steps', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ddk-deploy-'))
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+  init({ cwd: root, lang: 'en', title: 'T', install: false })
+  await assert.rejects(setupDeploy({ cwd: root, accountId: 'nope' }), /not a Cloudflare account id/)
+  const id = '0123456789abcdef0123456789abcdef'
+  await assert.rejects(setupDeploy({ cwd: root, accountId: id }), /package-lock\.json is missing/)
+  writeFileSync(join(root, 'docs/package-lock.json'), '{}\n')
+  const res = await setupDeploy({ cwd: root, accountId: id, project: 'my-docs' })
+  const wf = readFileSync(join(root, '.github/workflows/docs-site.yml'), 'utf8')
+  assert.match(wf, /CLOUDFLARE_ACCOUNT_ID: 0123456789abcdef0123456789abcdef/)
+  assert.match(wf, /PAGES_PROJECT: my-docs/)
+  assert.match(wf, /- "docs\/\*\*"/)
+  assert.match(wf, /\$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/)
+  assert.doesNotMatch(wf, /__[A-Z_]+__/)
+  const config = JSON.parse(readFileSync(join(root, '.design-docs.json'), 'utf8'))
+  assert.deepEqual(config.cloudflare, { accountId: id, project: 'my-docs' })
+  assert.deepEqual(res.status.steps.map((s) => [s.id, s.state]), [
+    ['account', 'done'],
+    ['workflow', 'todo'],
+    ['secret', 'unknown'],
+    ['run', 'unknown'],
+    ['access', 'unknown'],
+    ['site-url', 'todo'],
+  ])
+  init({ cwd: root, install: false })
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.design-docs.json'), 'utf8')).cloudflare, config.cloudflare)
 })

@@ -2,33 +2,15 @@
 // A dependency-free MCP server (stdio, JSON-RPC 2.0, one message per line)
 // that lets an AI client list, search, read and check the design docs.
 // Usage: node mcp.mjs [docsDir]   (default: the docs folder this file sits in)
-import { resolve, dirname, join } from 'node:path'
+import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { listPages, resolvePage, readPageFile, readSection, searchDocs, checkDocs } from './lib.mjs'
+import { findRoot, readConfig, deployStatus, formatStatus } from './deploy.mjs'
 
-const SERVER = { name: 'design-docs', version: '0.1.0' }
+const SERVER = { name: 'design-docs', version: '0.2.0' }
 const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
 const GUIDE_PAGE = 'guide/01-maintaining.md'
-
-function findConfig(docsDir) {
-  let dir = docsDir
-  for (let i = 0; i < 6; i++) {
-    const f = join(dir, '.design-docs.json')
-    if (existsSync(f)) {
-      try {
-        return JSON.parse(readFileSync(f, 'utf8'))
-      } catch {
-        return {}
-      }
-    }
-    const up = dirname(dir)
-    if (up === dir) break
-    dir = up
-  }
-  return {}
-}
 
 const TOOLS = [
   {
@@ -71,10 +53,20 @@ const TOOLS = [
       'Run the docs checker (titles, broken links, missing embeds, text that breaks the site build). Call after editing pages; errors must be fixed before committing.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  {
+    name: 'docs_deploy_status',
+    description:
+      'Check how far publishing the docs site has got: Cloudflare account, GitHub Actions workflow, repository secret, latest deploy, Cloudflare Access protection, recorded site address. Each step says whether it is done, the next action and who does it ("you" = only the person, "agent", "agent+you" = an agent in a browser the person signed in to). Uses git and the gh CLI.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
 ]
 
 export function createHandlers(docsDir) {
-  const config = findConfig(docsDir)
+  const root = findRoot(docsDir)
+  let config = {}
+  try {
+    config = readConfig(root)
+  } catch {}
   const text = (t) => ({ content: [{ type: 'text', text: t }] })
   const fail = (t) => ({ content: [{ type: 'text', text: t }], isError: true })
   return {
@@ -107,10 +99,13 @@ export function createHandlers(docsDir) {
       for (const w of warnings) out.push(`warning ${w}`)
       return text(out.join('\n'))
     },
+    async docs_deploy_status() {
+      return text(formatStatus(await deployStatus(root)))
+    },
   }
 }
 
-export function handleMessage(handlers, msg) {
+export async function handleMessage(handlers, msg) {
   const { id, method, params } = msg
   const reply = (result) => ({ jsonrpc: '2.0', id, result })
   const error = (code, message) => ({ jsonrpc: '2.0', id, error: { code, message } })
@@ -134,7 +129,7 @@ export function handleMessage(handlers, msg) {
       const fn = handlers[params?.name]
       if (!fn) return error(-32602, `Unknown tool: ${params?.name}`)
       try {
-        return reply(fn(params.arguments ?? {}))
+        return reply(await fn(params.arguments ?? {}))
       } catch (e) {
         return reply({ content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true })
       }
@@ -156,8 +151,9 @@ export function serve(docsDir, input = process.stdin, output = process.stdout) {
       output.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }) + '\n')
       return
     }
-    const res = handleMessage(handlers, msg)
-    if (res) output.write(JSON.stringify(res) + '\n')
+    handleMessage(handlers, msg).then((res) => {
+      if (res) output.write(JSON.stringify(res) + '\n')
+    })
   })
   return rl
 }

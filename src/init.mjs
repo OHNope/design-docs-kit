@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 
 const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const KIT_FILES = ['lib.mjs', 'sidebar.mjs', 'ui.mjs', 'check.mjs', 'mcp.mjs', 'sync.mjs']
+const KIT_FILES = ['lib.mjs', 'sidebar.mjs', 'ui.mjs', 'check.mjs', 'mcp.mjs', 'sync.mjs', 'deploy.mjs']
 const THEME_FILES = ['index.mjs', 'Embed.vue', 'custom.css']
 const GUIDE_PAGES = ['index.md', '01-maintaining.md', '02-mcp.md', '03-deploy.md']
 const VITEPRESS_VERSION = '^1.6.4'
@@ -33,7 +33,7 @@ export function detectRepo(cwd) {
   return { root, branch, slug: m ? `${m[1]}/${m[2]}` : null }
 }
 
-function readJson(file, fallback) {
+export function readJson(file, fallback) {
   if (!existsSync(file)) return fallback
   const text = readFileSync(file, 'utf8')
   try {
@@ -81,13 +81,14 @@ export function mergeDocsPackage(pkg, title) {
     check: 'node .vitepress/kit/check.mjs',
     build: 'node .vitepress/kit/check.mjs && vitepress build',
     preview: 'vitepress preview',
+    'deploy-status': 'node .vitepress/kit/deploy.mjs',
     ...out.scripts,
   }
   out.devDependencies = { vitepress: VITEPRESS_VERSION, ...out.devDependencies }
   return out
 }
 
-function fill(text, vars) {
+export function fill(text, vars) {
   return text.replace(/__([A-Z_]+)__/g, (m, k) => (k in vars ? vars[k] : m))
 }
 
@@ -98,12 +99,13 @@ export function init(opts = {}) {
   const configFile = join(root, '.design-docs.json')
   const prev = readJson(configFile, {})
   const config = {
+    ...prev,
     dir: opts.dir ?? prev.dir ?? 'docs',
     lang: opts.lang ?? prev.lang ?? 'en',
     title: opts.title ?? prev.title ?? basename(root),
     branch: opts.branch ?? prev.branch ?? repo.branch,
-    ...(prev.siteUrl || opts.siteUrl ? { siteUrl: opts.siteUrl ?? prev.siteUrl } : {}),
   }
+  if (opts.siteUrl) config.siteUrl = opts.siteUrl
   const dir = config.dir.replace(/\/+$/, '')
   const docs = join(root, dir)
   const pagesLang = existsSync(join(PKG_ROOT, 'templates/pages', config.lang)) ? config.lang : 'en'
